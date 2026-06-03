@@ -2,131 +2,393 @@
 // APP.JS — Logique principale FreePlay
 // =============================================
 
-// ── État global ──
-let state = {
-  platform: 'all',
-  category: 'all',
-  search: '',
+const App = {
+  state: {
+    platform: 'all',
+    category: 'all',
+    search: '',
+    selectedGameId: null,
+  },
+  elements: {},
+  searchTimer: null,
+  gameInteractions: {},
+  currentAdminTab: 'users',
+  adminLogRefreshInterval: null,
 };
 
-// ── Helpers de couleur par rôle ──
-function roleColor(role) {
-  const c = { membre:'#7878a0', moderateur:'#00e5ff', admin:'#ffbe00', fondateur:'#ff3c5f' };
-  return c[role] || '#7878a0';
-}
-function roleIcon(role) {
-  const i = { membre:'👤', moderateur:'🛡️', admin:'⚙️', fondateur:'👑' };
-  return i[role] || '👤';
-}
-function roleLabel(role) {
-  const l = { membre:'Membre', moderateur:'Modérateur', admin:'Admin', fondateur:'Fondateur' };
-  return l[role] || role;
-}
-function avatarBg(pseudo) {
-  const colors = ['#ff3c5f','#ff9500','#ffbe00','#00c470','#00e5ff','#007aff','#af52de'];
-  let h = 0; for (let c of pseudo) h = (h * 31 + c.charCodeAt(0)) % colors.length;
-  return colors[h];
+function $(id) {
+  return document.getElementById(id);
 }
 
-// ══════════════════════════════════
-// PAGES
-// ══════════════════════════════════
+function formatDate(timestamp) {
+  return timestamp ? new Date(timestamp).toLocaleDateString('fr-FR') : '—';
+}
+
+function avatarBg(pseudo) {
+  const colors = ['#ff3c5f', '#ff9500', '#ffbe00', '#00c470', '#00e5ff', '#007aff', '#af52de'];
+  let hash = 0;
+  for (const char of pseudo) {
+    hash = (hash * 31 + char.charCodeAt(0)) % colors.length;
+  }
+  return colors[hash];
+}
+
+function roleColor(role) {
+  const map = { membre: '#7878a0', moderateur: '#00e5ff', admin: '#ffbe00', fondateur: '#ff3c5f' };
+  return map[role] || '#7878a0';
+}
+
+function roleIcon(role) {
+  const map = { membre: '👤', moderateur: '🛡️', admin: '⚙️', fondateur: '👑' };
+  return map[role] || '👤';
+}
+
+function roleLabel(role) {
+  const map = { membre: 'Membre', moderateur: 'Modérateur', admin: 'Admin', fondateur: 'Fondateur' };
+  return map[role] || role;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function loadGameInteractions() {
+  try {
+    App.gameInteractions = JSON.parse(localStorage.getItem('fp_game_interactions') || '{}');
+  } catch {
+    App.gameInteractions = {};
+  }
+}
+
+function saveGameInteractions() {
+  localStorage.setItem('fp_game_interactions', JSON.stringify(App.gameInteractions));
+}
+
+function ensureGameStore(gameId) {
+  if (!App.gameInteractions[gameId]) {
+    App.gameInteractions[gameId] = { comments: [], ratings: {} };
+  }
+  return App.gameInteractions[gameId];
+}
+
+function getGameComments(gameId) {
+  return ensureGameStore(gameId).comments;
+}
+
+function getGameRatingStats(gameId) {
+  const ratings = Object.values(ensureGameStore(gameId).ratings).map(Number);
+  const count = ratings.length;
+  const average = count ? ratings.reduce((sum, value) => sum + value, 0) / count : 0;
+  return { count, average };
+}
+
+function getUserGameRating(gameId) {
+  const user = Auth.currentUser();
+  if (!user) return 0;
+  return ensureGameStore(gameId).ratings[user.id] || 0;
+}
+
+function addGameComment(gameId, text) {
+  const user = Auth.currentUser();
+  if (!user) return { ok: false, error: 'Vous devez être connecté.' };
+  if (!text) return { ok: false, error: 'Le commentaire ne peut pas être vide.' };
+
+  const store = ensureGameStore(gameId);
+  store.comments.unshift({
+    id: `c_${Date.now().toString(36)}`,
+    userId: user.id,
+    pseudo: user.pseudo,
+    text,
+    timestamp: Date.now(),
+  });
+  saveGameInteractions();
+  return { ok: true };
+}
+
+function setGameRating(gameId, score) {
+  const user = Auth.currentUser();
+  if (!user) return { ok: false, error: 'Vous devez être connecté.' };
+  const value = Number(score);
+  if (!value || value < 1 || value > 5) return { ok: false, error: 'Note invalide.' };
+
+  const store = ensureGameStore(gameId);
+  store.ratings[user.id] = value;
+  saveGameInteractions();
+  return { ok: true };
+}
+
+function getGamePlatformChips(game) {
+  return (game.platforms || []).map(code => `<span class="game-chip">${PLATFORMS[code]?.icon || ''} ${PLATFORMS[code]?.label || code}</span>`).join(' ');
+}
+
+function loadFeaturedOverrides() {
+  try {
+    App.featuredOverride = JSON.parse(localStorage.getItem('fp_featured_override') || '{}');
+  } catch {
+    App.featuredOverride = {};
+  }
+}
+
+function saveFeaturedOverrides() {
+  localStorage.setItem('fp_featured_override', JSON.stringify(App.featuredOverride));
+}
+
+function startAdminLiveLogs() {
+  stopAdminLiveLogs();
+  if (!Auth.isFounder()) return;
+  App.adminLogRefreshInterval = setInterval(() => {
+    if (App.currentAdminTab === 'logs') updateAdminLogsList();
+  }, 2500);
+}
+
+function stopAdminLiveLogs() {
+  if (App.adminLogRefreshInterval) {
+    clearInterval(App.adminLogRefreshInterval);
+    App.adminLogRefreshInterval = null;
+  }
+}
+
+function isGameFeatured(game) {
+  return App.featuredOverride[game.id] ?? game.featured;
+}
+
+function toggleGameFeatured(gameId) {
+  const game = games.find(g => g.id === gameId);
+  if (!game) return;
+  App.featuredOverride[gameId] = !isGameFeatured(game);
+  saveFeaturedOverrides();
+  renderFeatured();
+  if (App.currentAdminTab === 'games') renderAdminGames();
+}
+
+function hideGameModal() {
+  $('gameModal').classList.remove('open');
+}
+
+function closeGameModalOverlay(event) {
+  if (event.target.id === 'gameModal') {
+    hideGameModal();
+  }
+}
+
+function openGameModal(gameId) {
+  const game = games.find(item => item.id === gameId);
+  if (!game) return;
+  App.state.selectedGameId = gameId;
+
+  const comments = getGameComments(gameId);
+  const ratingInfo = getGameRatingStats(gameId);
+  const userRating = getUserGameRating(gameId);
+  const sizeLabel = game.size || GAME_SIZES?.[game.id] || 'Non renseignée';
+  const downloadUrl = game.downloadUrl || game.url;
+
+  $('gameModalContent').innerHTML = `
+    <div class="game-detail-header">
+      <div class="game-detail-title">
+        <div class="game-detail-badge">${game.emoji}</div>
+        <div>
+          <div class="game-detail-name" id="gameModalTitle">${escapeHtml(game.name)}</div>
+          <div class="game-detail-meta">${escapeHtml(game.catLabel || game.cat)} · ${getGamePlatformChips(game)}</div>
+        </div>
+      </div>
+      <div class="game-detail-size">Taille estimée : <strong>${escapeHtml(sizeLabel)}</strong></div>
+    </div>
+    <p class="game-detail-desc">${escapeHtml(game.desc)}</p>
+    <div class="game-detail-actions">
+      <a class="btn-primary" href="${downloadUrl}" target="_blank" rel="noopener noreferrer">Télécharger</a>
+      <a class="btn-secondary" href="${game.url}" target="_blank" rel="noopener noreferrer">Jouer</a>
+    </div>
+    <div class="game-rating-panel">
+      <div class="rating-overview">
+        <div class="rating-score"><strong>${ratingInfo.count ? ratingInfo.average.toFixed(1) : '—'}</strong> / 5</div>
+        <div class="rating-count">${ratingInfo.count} avis</div>
+      </div>
+      <div class="rating-stars">
+        ${[1, 2, 3, 4, 5].map(value => `
+          <button type="button" class="star-btn ${value <= userRating ? 'active' : ''}" data-action="rate-game" data-game-id="${game.id}" data-score="${value}" aria-label="Donner ${value} étoiles">${value <= userRating ? '★' : '☆'}</button>
+        `).join('')}
+      </div>
+      <div class="rating-note">${userRating ? `Ta note : ${userRating} ⭐` : 'Clique sur une étoile pour noter ce jeu.'}</div>
+    </div>
+    <div class="game-comments-section">
+      <div class="section-title" style="margin-bottom:14px;font-size:1.2rem;">Commentaires</div>
+      <form id="gameCommentForm" class="comment-form">
+        <textarea id="gameCommentText" placeholder="Laisse un avis sur ce jeu..." rows="3"></textarea>
+        <button type="submit" class="btn-primary">Publier</button>
+      </form>
+      <div class="game-comment-list">
+        ${comments.length ? comments.map(comment => `
+          <div class="comment-entry">
+            <div class="comment-meta">
+              <span class="comment-user">${escapeHtml(comment.pseudo)}</span>
+              <span class="comment-time">${new Date(comment.timestamp).toLocaleDateString('fr-FR')}</span>
+            </div>
+            <p class="comment-text">${escapeHtml(comment.text)}</p>
+          </div>
+        `).join('') : '<div class="empty-comments">Aucun commentaire pour l’instant. Soyez le premier !</div>'}
+      </div>
+    </div>
+  `;
+
+  const form = $('gameCommentForm');
+  if (form) {
+    form.addEventListener('submit', handleGameCommentSubmit);
+  }
+
+  $('gameModal').classList.add('open');
+}
+
+function handleGameCommentSubmit(event) {
+  event.preventDefault();
+  const text = $('gameCommentText')?.value.trim();
+  if (!text) {
+    alert('Écris un commentaire avant de publier.');
+    return;
+  }
+
+  const result = addGameComment(App.state.selectedGameId, text);
+  if (!result.ok) {
+    alert(result.error);
+    return;
+  }
+
+  openGameModal(App.state.selectedGameId);
+}
+
+function renderHeaderAuth() {
+  const header = $('headerAuth');
+  const user = Auth.currentUser();
+  if (!user) {
+    header.innerHTML = `
+      <button type="button" class="btn-login" data-action="open-auth" data-auth-target="login">Connexion</button>
+      <button type="button" class="btn-register" data-action="open-auth" data-auth-target="register">S'inscrire</button>
+    `;
+    return;
+  }
+
+  header.innerHTML = `
+    ${Auth.isAdmin() ? `<button type="button" class="btn-admin" data-action="show-page" data-page="admin">⚙️ Panel</button>` : ''}
+    <div class="user-chip" data-action="open-profile">
+      <div class="user-avatar" style="background:${avatarBg(user.pseudo)}">${roleIcon(user.role)}</div>
+      <span class="user-pseudo">${user.pseudo}</span>
+      <span class="role-badge" style="background:${roleColor(user.role)}22;color:${roleColor(user.role)}">${roleLabel(user.role)}</span>
+    </div>
+  `;
+}
+
 function showPage(page) {
+  if (page === 'home' && !Auth.isLoggedIn()) {
+    $('pagHome').style.display = 'none';
+    showAuthModal('login');
+    return;
+  }
   if (page === 'admin' && !Auth.isAdmin()) {
     alert('Accès réservé aux administrateurs.');
     page = 'home';
   }
-  document.getElementById('pagHome').style.display  = page === 'home'  ? '' : 'none';
-  document.getElementById('pagAdmin').style.display = page === 'admin' ? '' : 'none';
-  document.getElementById('siteFooter').style.display = page === 'admin' ? 'none' : '';
-  if (page === 'admin') adminTab('users');
+  const isAdminPage = page === 'admin';
+  $('pagHome').style.display = page === 'home' ? '' : 'none';
+  $('pagAdmin').style.display = isAdminPage ? '' : 'none';
+  $('siteFooter').style.display = isAdminPage ? 'none' : '';
+  if (isAdminPage) {
+    adminTab(App.currentAdminTab);
+  } else {
+    stopAdminLiveLogs();
+  }
   window.scrollTo(0, 0);
 }
 
-// ══════════════════════════════════
-// AUTH UI
-// ══════════════════════════════════
-function renderHeaderAuth() {
-  const el = document.getElementById('headerAuth');
-  const u  = Auth.currentUser();
-  if (!u) {
-    el.innerHTML = `
-      <button class="btn-login"    onclick="showAuthModal('login')">Connexion</button>
-      <button class="btn-register" onclick="showAuthModal('register')">S'inscrire</button>`;
-  } else {
-    const bg    = avatarBg(u.pseudo);
-    const admin = Auth.isAdmin();
-    el.innerHTML = `
-      ${admin ? `<button class="btn-admin" onclick="showPage('admin')">⚙️ Panel</button>` : ''}
-      <div class="user-chip" onclick="showProfileModal()">
-        <div class="user-avatar" style="background:${bg}">${roleIcon(u.role)}</div>
-        <span class="user-pseudo">${u.pseudo}</span>
-        <span class="role-badge" style="background:${roleColor(u.role)}22;color:${roleColor(u.role)}">${roleLabel(u.role)}</span>
-      </div>`;
+function showAuthModal(tab = 'login') {
+  $('authModal').classList.add('open');
+  switchAuthTab(tab);
+}
+
+function hideAuthModal() {
+  $('authModal').classList.remove('open');
+}
+
+function closeAuthModal(event) {
+  if (event.target.id === 'authModal') {
+    hideAuthModal();
   }
 }
 
-// ── Modal Auth ──
-function showAuthModal(tab = 'login') {
-  document.getElementById('authModal').classList.add('open');
-  switchTab(tab);
-}
-function hideAuthModal() { document.getElementById('authModal').classList.remove('open'); }
-function closeAuthModal(e) { if (e.target.id === 'authModal') hideAuthModal(); }
-function switchTab(tab) {
-  document.getElementById('tabLogin').classList.toggle('active', tab === 'login');
-  document.getElementById('tabRegister').classList.toggle('active', tab === 'register');
-  document.getElementById('formLogin').style.display    = tab === 'login'    ? '' : 'none';
-  document.getElementById('formRegister').style.display = tab === 'register' ? '' : 'none';
+function switchAuthTab(tab) {
+  $('tabLogin').classList.toggle('active', tab === 'login');
+  $('tabRegister').classList.toggle('active', tab === 'register');
+  $('formLogin').style.display = tab === 'login' ? '' : 'none';
+  $('formRegister').style.display = tab === 'register' ? '' : 'none';
 }
 
-async function doLogin() {
-  const pseudo   = document.getElementById('loginPseudo').value.trim();
-  const password = document.getElementById('loginPassword').value;
-  const errEl    = document.getElementById('loginError');
-  errEl.textContent = '';
-  const r = await Auth.login(pseudo, password);
-  if (!r.ok) { errEl.textContent = r.error; return; }
+async function handleLogin(event) {
+  event.preventDefault();
+  const pseudo = $('loginPseudo').value.trim();
+  const password = $('loginPassword').value;
+  const error = $('loginError');
+  error.textContent = '';
+  const result = await Auth.login(pseudo, password);
+  if (!result.ok) {
+    error.textContent = result.error;
+    return;
+  }
   hideAuthModal();
   renderHeaderAuth();
+  showPage('home');
 }
 
-async function doRegister() {
-  const pseudo   = document.getElementById('regPseudo').value.trim();
-  const email    = document.getElementById('regEmail').value.trim();
-  const password = document.getElementById('regPassword').value;
-  const errEl    = document.getElementById('registerError');
-  errEl.textContent = '';
-  const r = await Auth.register(pseudo, email, password);
-  if (!r.ok) { errEl.textContent = r.error; return; }
-  // Auto-login
+async function handleRegister(event) {
+  event.preventDefault();
+  const pseudo = $('regPseudo').value.trim();
+  const email = $('regEmail').value.trim();
+  const password = $('regPassword').value;
+  const error = $('registerError');
+  error.textContent = '';
+  const result = await Auth.register(pseudo, email, password);
+  if (!result.ok) {
+    error.textContent = result.error;
+    return;
+  }
   await Auth.login(pseudo, password);
   hideAuthModal();
   renderHeaderAuth();
+  showPage('home');
 }
 
-// ── Modal Profil ──
 function showProfileModal() {
-  const u = Auth.currentUser();
-  if (!u) return;
-  const bg = avatarBg(u.pseudo);
-  document.getElementById('profileContent').innerHTML = `
+  const user = Auth.currentUser();
+  if (!user) return;
+  $('profileContent').innerHTML = `
     <div class="profile-header">
-      <div class="profile-avatar" style="background:${bg}">${roleIcon(u.role)}</div>
+      <div class="profile-avatar" style="background:${avatarBg(user.pseudo)}">${roleIcon(user.role)}</div>
       <div>
-        <div class="profile-pseudo">${u.pseudo}</div>
-        <span class="role-badge profile-role" style="background:${roleColor(u.role)}22;color:${roleColor(u.role)}">${roleIcon(u.role)} ${roleLabel(u.role)}</span>
+        <div class="profile-pseudo">${user.pseudo}</div>
+        <span class="role-badge profile-role" style="background:${roleColor(user.role)}22;color:${roleColor(user.role)}">${roleIcon(user.role)} ${roleLabel(user.role)}</span>
       </div>
     </div>
     <div class="profile-info">
-      <div>ID : <span class="td-id">${u.id}</span></div>
-      <div style="margin-top:8px">Rôle : <span>${roleLabel(u.role)}</span></div>
+      <div>ID : <span class="td-id">${user.id}</span></div>
+      <div style="margin-top:8px">Rôle : <span>${roleLabel(user.role)}</span></div>
     </div>
-    <button class="btn-logout" onclick="doLogout()">Se déconnecter</button>`;
-  document.getElementById('profileModal').classList.add('open');
+    <button type="button" class="btn-logout" data-action="logout">Se déconnecter</button>
+  `;
+  $('profileModal').classList.add('open');
 }
-function hideProfileModal() { document.getElementById('profileModal').classList.remove('open'); }
-function closeProfileModal(e) { if (e.target.id === 'profileModal') hideProfileModal(); }
+
+function hideProfileModal() {
+  $('profileModal').classList.remove('open');
+}
+
+function closeProfileModal(event) {
+  if (event.target.id === 'profileModal') {
+    hideProfileModal();
+  }
+}
+
 function doLogout() {
   Auth.logout();
   hideProfileModal();
@@ -134,355 +396,539 @@ function doLogout() {
   showPage('home');
 }
 
-// ══════════════════════════════════
-// PLATEFORMES
-// ══════════════════════════════════
-function countForPlatform(pid) {
-  if (pid === 'all') return games.length;
-  return games.filter(g => g.platforms.includes(pid)).length;
+function countForPlatform(platformId) {
+  if (platformId === 'all') return games.length;
+  return games.filter(game => game.platforms.includes(platformId)).length;
 }
+
 function renderPlatforms() {
-  const grid = document.getElementById('platformGrid');
-  const allPlatforms = [
+  const grid = $('platformGrid');
+  const items = [
     { id: 'all', label: 'Tous', icon: '🎮' },
-    ...Object.entries(PLATFORMS).map(([id, p]) => ({ id, ...p }))
+    ...Object.entries(PLATFORMS).map(([id, data]) => ({ id, ...data })),
   ];
-  grid.innerHTML = allPlatforms.map(p => `
-    <div class="platform-card ${state.platform === p.id ? 'active' : ''}" onclick="selectPlatform('${p.id}')">
-      <div class="plat-icon">${p.icon}</div>
-      <div class="plat-name">${p.label}</div>
-      <div class="plat-count">${countForPlatform(p.id)} jeux</div>
-    </div>`).join('');
+  grid.innerHTML = items.map(item => `
+    <button type="button" class="platform-card ${App.state.platform === item.id ? 'active' : ''}" data-action="select-platform" data-platform="${item.id}">
+      <div class="plat-icon">${item.icon}</div>
+      <div class="plat-name">${item.label}</div>
+      <div class="plat-count">${countForPlatform(item.id)} jeux</div>
+    </button>
+  `).join('');
 }
-function selectPlatform(pid) {
-  state.platform = pid;
-  state.category = 'all';
+
+function selectPlatform(platformId) {
+  App.state.platform = platformId;
+  App.state.category = 'all';
   renderPlatforms();
   renderCategoryFilters();
   renderGames();
-  const el = document.getElementById('gamesTitle');
-  const pObj = PLATFORMS[pid];
-  el.textContent = pid === 'all' ? 'Tous les jeux' : `Jeux ${pObj ? pObj.label : pid}`;
+  $('gamesTitle').textContent = platformId === 'all' ? 'Tous les jeux' : `Jeux ${PLATFORMS[platformId]?.label || platformId}`;
   scrollToGames();
 }
 
-// ══════════════════════════════════
-// CATÉGORIES (dynamiques selon la plateforme)
-// ══════════════════════════════════
 function getVisibleGames() {
-  return games.filter(g => {
-    const platOk = state.platform === 'all' || g.platforms.includes(state.platform);
-    const catOk  = state.category === 'all' || g.cat === state.category || g.catLabel === state.category;
-    const q      = state.search.toLowerCase();
-    const searchOk = !q ||
-      g.name.toLowerCase().includes(q) ||
-      (g.desc || '').toLowerCase().includes(q) ||
-      (g.catLabel || '').toLowerCase().includes(q) ||
-      (g.tags || []).some(t => t.toLowerCase().includes(q));
-    return platOk && catOk && searchOk;
+  const query = App.state.search.toLowerCase();
+  return games.filter(game => {
+    const platformOk = App.state.platform === 'all' || game.platforms.includes(App.state.platform);
+    const categoryOk = App.state.category === 'all' || game.cat === App.state.category || game.catLabel === App.state.category;
+    const searchOk = !query || [game.name, game.desc, game.catLabel, game.cat, ...(game.tags || [])].some(value =>
+      String(value).toLowerCase().includes(query)
+    );
+    return platformOk && categoryOk && searchOk;
   });
 }
 
 function renderCategoryFilters() {
-  const platGames = games.filter(g => state.platform === 'all' || g.platforms.includes(state.platform));
-  const cats = {};
-  platGames.forEach(g => {
-    if (!g.cat) return;
-    if (!cats[g.cat]) {
-      cats[g.cat] = {
+  const filteredGames = games.filter(game => App.state.platform === 'all' || game.platforms.includes(App.state.platform));
+  const categories = filteredGames.reduce((acc, game) => {
+    if (!game.cat) return acc;
+    if (!acc[game.cat]) {
+      acc[game.cat] = {
         count: 0,
-        label: g.catLabel || CATEGORIES[g.cat]?.label || g.cat,
-        icon: CATEGORIES[g.cat]?.icon || '🎲'
+        label: game.catLabel || CATEGORIES[game.cat]?.label || game.cat,
+        icon: CATEGORIES[game.cat]?.icon || '🎲',
       };
     }
-    cats[g.cat].count += 1;
-  });
-  const catDefs = Object.entries(cats).sort((a,b) => b[1].count - a[1].count);
-  const container = document.getElementById('catFilters');
-  container.innerHTML = `<button class="cat-btn ${state.category==='all'?'active':''}" onclick="selectCat('all')">🎮 Tous (${platGames.length})</button>` +
-    catDefs.map(([cat, data]) => {
-      return `<button class="cat-btn ${state.category===cat?'active':''}" onclick="selectCat('${cat}')">${data.icon} ${data.label} (${data.count})</button>`;
-    }).join('');
+    acc[game.cat].count += 1;
+    return acc;
+  }, {});
+
+  const buttons = Object.entries(categories).sort((a, b) => b[1].count - a[1].count).map(([cat, data]) => `
+    <button type="button" class="cat-btn ${App.state.category === cat ? 'active' : ''}" data-action="select-category" data-category="${cat}">
+      ${data.icon} ${data.label} (${data.count})
+    </button>
+  `).join('');
+
+  $('catFilters').innerHTML = `
+    <button type="button" class="cat-btn ${App.state.category === 'all' ? 'active' : ''}" data-action="select-category" data-category="all">🎮 Tous (${filteredGames.length})</button>
+    ${buttons}
+  `;
 }
-function selectCat(cat) {
-  state.category = cat;
+
+function selectCategory(categoryId) {
+  App.state.category = categoryId;
   renderCategoryFilters();
   renderGames();
 }
 
-// ══════════════════════════════════
-// JEUX
-// ══════════════════════════════════
 function renderGames() {
-  const list  = getVisibleGames();
-  const grid  = document.getElementById('gamesGrid');
-  const noRes = document.getElementById('noResults');
-  const cnt   = document.getElementById('gameCount');
-  cnt.textContent = `${list.length} jeu${list.length !== 1 ? 'x' : ''}`;
-  noRes.style.display = list.length === 0 ? 'block' : 'none';
-  grid.innerHTML = list.map((g, i) => {
-    const plats = (g.platforms||[]).map(p => PLATFORMS[p]?.icon || '').join('');
+  const list = getVisibleGames();
+  const grid = $('gamesGrid');
+  const noResults = $('noResults');
+  const count = $('gameCount');
+
+  count.textContent = `${list.length} jeu${list.length === 1 ? '' : 'x'}`;
+  noResults.style.display = list.length === 0 ? 'block' : 'none';
+  grid.innerHTML = list.map((game, index) => {
+    const icons = (game.platforms || []).map(code => PLATFORMS[code]?.icon || '').join('');
     return `
-    <a class="game-card" href="${g.url}" target="_blank" rel="noopener noreferrer" style="animation-delay:${i*30}ms">
-      <div class="thumb">
-        ${g.emoji}
-        <span class="free-badge">GRATUIT</span>
-      </div>
-      <div class="gc-info">
-        <div class="gc-name" title="${g.name}">${g.name}</div>
-        <div class="gc-plat">${plats} ${g.catLabel || g.cat}</div>
-      </div>
-    </a>`;
+      <button type="button" class="game-card" data-action="open-game" data-game-id="${game.id}" style="animation-delay:${index * 30}ms">
+        <div class="thumb">
+          ${game.emoji}
+          <span class="free-badge">GRATUIT</span>
+        </div>
+        <div class="gc-info">
+          <div class="gc-name" title="${game.name}">${game.name}</div>
+          <div class="gc-plat">${icons} ${game.catLabel || game.cat}</div>
+        </div>
+      </button>
+    `;
   }).join('');
 }
 
 function renderFeatured() {
-  const featured = games.filter(g => g.featured).slice(0, 6);
-  document.getElementById('featuredGrid').innerHTML = featured.map(g => {
-    const plats = (g.platforms||[]).map(p => PLATFORMS[p]?.icon || '').join(' ');
+  const featured = games.filter(game => isGameFeatured(game)).slice(0, 6);
+  $('featuredGrid').innerHTML = featured.map(game => {
+    const icons = (game.platforms || []).map(code => PLATFORMS[code]?.icon || '').join(' ');
     return `
-    <a class="featured-card" href="${g.url}" target="_blank" rel="noopener noreferrer">
-      <div class="thumb">${g.emoji}</div>
-      <div class="info">
-        <span class="f-badge">⭐ À la une</span>
-        <div class="f-name">${g.name}</div>
-        <p class="f-desc">${g.desc}</p>
-        <div class="f-meta">
-          <span class="tag">${g.catLabel || g.cat}</span>
-          <span class="plat-tag">${plats}</span>
-          <button class="play-btn" onclick="event.preventDefault();window.open('${g.url}','_blank')">▶ Jouer</button>
+      <button type="button" class="featured-card" data-action="open-game" data-game-id="${game.id}">
+        <div class="thumb">${game.emoji}</div>
+        <div class="info">
+          <span class="f-badge">⭐ À la une</span>
+          <div class="f-name">${game.name}</div>
+          <p class="f-desc">${game.desc}</p>
+          <div class="f-meta">
+            <span class="tag">${game.catLabel || game.cat}</span>
+            <span class="plat-tag">${icons}</span>
+            <a class="play-btn" data-action="play-game" href="${game.url}" target="_blank" rel="noopener noreferrer">▶ Jouer</a>
+          </div>
         </div>
-      </div>
-    </a>`;
+      </button>
+    `;
   }).join('');
 }
 
-// ── Recherche ──
-let searchTimer;
-function onSearch() {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    state.search = document.getElementById('searchInput').value.trim();
+function onSearch(event) {
+  clearTimeout(App.searchTimer);
+  App.searchTimer = setTimeout(() => {
+    App.state.search = $('searchInput').value.trim();
     renderGames();
   }, 200);
 }
 
-// ── Scroll helpers ──
-function scrollToPlatforms() { document.getElementById('platformsSection').scrollIntoView({ behavior: 'smooth' }); }
-function scrollToGames()     { document.getElementById('allGamesSection').scrollIntoView({ behavior: 'smooth' }); }
+function scrollToPlatforms() {
+  $('platformsSection').scrollIntoView({ behavior: 'smooth' });
+}
 
-// ══════════════════════════════════
-// ADMIN PANEL
-// ══════════════════════════════════
-let currentAdminTab = 'users';
+function scrollToGames() {
+  $('allGamesSection').scrollIntoView({ behavior: 'smooth' });
+}
 
 function adminTab(tab) {
-  currentAdminTab = tab;
-  document.querySelectorAll('.adm-btn').forEach(b => b.classList.remove('active'));
-  const idx = ['users','roles','logs','games'].indexOf(tab);
-  document.querySelectorAll('.adm-btn')[idx]?.classList.add('active');
+  App.currentAdminTab = tab;
+  document.querySelectorAll('.adm-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.adminTab === tab));
 
   if (!Auth.isAdmin()) {
-    document.getElementById('adminMain').innerHTML = '<p style="color:var(--accent);padding:40px">⛔ Accès refusé.</p>';
+    $('adminMain').innerHTML = '<p style="color:var(--accent);padding:40px">⛔ Accès refusé.</p>';
     return;
   }
-  if (tab === 'users')  renderAdminUsers();
-  if (tab === 'roles')  renderAdminRoles();
-  if (tab === 'logs')   renderAdminLogs();
-  if (tab === 'games')  renderAdminGames();
+
+  if (tab === 'users') renderAdminUsers();
+  if (tab === 'roles') renderAdminRoles();
+  if (tab === 'logs') renderAdminLogs();
+  if (tab === 'games') renderAdminGames();
+  if (tab === 'logs') startAdminLiveLogs(); else stopAdminLiveLogs();
+}
+
+function renderAdminUserRows(list) {
+  return list.map(user => `
+    <tr>
+      <td class="td-id" title="${user.id}">${user.id}</td>
+      <td style="display:flex;align-items:center;gap:8px;padding:10px 14px">
+        <div class="user-avatar" style="background:${avatarBg(user.pseudo)};width:26px;height:26px;font-size:.7rem">${roleIcon(user.role)}</div>
+        <strong>${user.pseudo}</strong>
+      </td>
+      <td>${user.email}</td>
+      <td><span class="role-badge" style="background:${roleColor(user.role)}22;color:${roleColor(user.role)}">${roleLabel(user.role)}</span></td>
+      <td>${formatDate(user.createdAt)}</td>
+      <td>${formatDate(user.lastLogin)}</td>
+      <td>${user.banned ? '<span style="color:var(--accent);font-weight:700">Banni</span>' : '<span style="color:var(--green)">Actif</span>'}</td>
+      <td><div class="td-actions">
+        ${user.role !== 'fondateur' ? `
+          <button type="button" class="act-btn ${user.banned ? 'act-unban' : 'act-ban'}" data-admin-action="toggle-ban" data-user-id="${user.id}">${user.banned ? 'Débannir' : 'Bannir'}</button>
+          <button type="button" class="act-btn act-del" data-admin-action="delete-user" data-user-id="${user.id}" data-user-pseudo="${user.pseudo}">Suppr.</button>
+        ` : '<span style="color:var(--accent);font-size:.8rem">Fondateur</span>'}
+      </div></td>
+    </tr>
+  `).join('');
+}
+
+function adminFilterUsers() {
+  const query = $('adminUserSearch').value.trim().toLowerCase();
+  const users = Auth.getAllUsers();
+  const filtered = users.filter(user =>
+    user.pseudo.toLowerCase().includes(query) ||
+    user.email.toLowerCase().includes(query) ||
+    user.role.toLowerCase().includes(query)
+  );
+  $('adminUserList').innerHTML = renderAdminUserRows(filtered);
+  $('adminUserCount').textContent = `Résultats : ${filtered.length}`;
 }
 
 function renderAdminUsers() {
   const users = Auth.getAllUsers();
-  const isFounder = Auth.isFounder();
   const stats = {
-    total:     users.length,
-    fondateur: users.filter(u=>u.role==='fondateur').length,
-    admin:     users.filter(u=>u.role==='admin').length,
-    modero:    users.filter(u=>u.role==='moderateur').length,
-    membres:   users.filter(u=>u.role==='membre').length,
-    bannis:    users.filter(u=>u.banned).length,
+    total: users.length,
+    fondateur: users.filter(u => u.role === 'fondateur').length,
+    admin: users.filter(u => u.role === 'admin').length,
+    moderateur: users.filter(u => u.role === 'moderateur').length,
+    membre: users.filter(u => u.role === 'membre').length,
+    bannis: users.filter(u => u.banned).length,
   };
-  document.getElementById('adminMain').innerHTML = `
+
+  $('adminMain').innerHTML = `
     <h2 class="admin-section-title">👥 Utilisateurs</h2>
+    <div class="admin-panel-top">
+      <input class="admin-search" id="adminUserSearch" placeholder="Rechercher un utilisateur..." />
+      <span class="admin-hint" id="adminUserCount">Résultats : ${users.length}</span>
+    </div>
     <div class="stats-row">
       <div class="stat-card"><div class="stat-num">${stats.total}</div><div class="stat-label">Total</div></div>
       <div class="stat-card"><div class="stat-num" style="color:var(--accent)">${stats.fondateur}</div><div class="stat-label">Fondateurs</div></div>
       <div class="stat-card"><div class="stat-num" style="color:var(--accent2)">${stats.admin}</div><div class="stat-label">Admins</div></div>
-      <div class="stat-card"><div class="stat-num" style="color:var(--accent3)">${stats.modero}</div><div class="stat-label">Modérateurs</div></div>
-      <div class="stat-card"><div class="stat-num">${stats.membres}</div><div class="stat-label">Membres</div></div>
+      <div class="stat-card"><div class="stat-num" style="color:var(--accent3)">${stats.moderateur}</div><div class="stat-label">Modérateurs</div></div>
+      <div class="stat-card"><div class="stat-num">${stats.membre}</div><div class="stat-label">Membres</div></div>
       <div class="stat-card"><div class="stat-num" style="color:var(--accent)">${stats.bannis}</div><div class="stat-label">Bannis</div></div>
     </div>
     <div style="overflow-x:auto">
-    <table class="admin-table">
-      <thead><tr>
-        <th>ID</th><th>Pseudo</th><th>Email</th><th>Rôle</th><th>Créé le</th><th>Dernier login</th><th>Statut</th><th>Actions</th>
-      </tr></thead>
-      <tbody>
-        ${users.map(u => {
-          const bg = avatarBg(u.pseudo);
-          const date = d => d ? new Date(d).toLocaleDateString('fr-FR') : '—';
-          return `<tr>
-            <td class="td-id" title="${u.id}">${u.id}</td>
-            <td style="display:flex;align-items:center;gap:8px;padding:10px 14px">
-              <div class="user-avatar" style="background:${bg};width:26px;height:26px;font-size:.7rem">${roleIcon(u.role)}</div>
-              <strong>${u.pseudo}</strong>
-            </td>
-            <td>${u.email}</td>
-            <td><span class="role-badge" style="background:${roleColor(u.role)}22;color:${roleColor(u.role)}">${roleLabel(u.role)}</span></td>
-            <td>${date(u.createdAt)}</td>
-            <td>${date(u.lastLogin)}</td>
-            <td>${u.banned ? '<span style="color:var(--accent);font-weight:700">Banni</span>' : '<span style="color:var(--green)">Actif</span>'}</td>
-            <td><div class="td-actions">
-              ${u.role !== 'fondateur' ? `
-                <button class="act-btn ${u.banned?'act-unban':'act-ban'}" onclick="adminToggleBan('${u.id}')">${u.banned?'Débannir':'Bannir'}</button>
-                ${isFounder ? `<button class="act-btn act-del" onclick="adminDelete('${u.id}','${u.pseudo}')">Suppr.</button>` : ''}
-              ` : '<span style="color:var(--accent);font-size:.8rem">Fondateur</span>'}
-            </div></td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table></div>`;
+      <table class="admin-table">
+        <thead><tr>
+          <th>ID</th><th>Pseudo</th><th>Email</th><th>Rôle</th><th>Créé le</th><th>Dernier login</th><th>Statut</th><th>Actions</th>
+        </tr></thead>
+        <tbody id="adminUserList">
+          ${renderAdminUserRows(users)}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  $('adminUserSearch').addEventListener('input', adminFilterUsers);
 }
 
 function renderAdminRoles() {
-  const users = Auth.getAllUsers().filter(u => u.role !== 'fondateur' || Auth.isFounder());
+  const users = Auth.getAllUsers().filter(user => user.role !== 'fondateur' || Auth.isFounder());
   const isFounder = Auth.isFounder();
-  const allRoles = isFounder
-    ? ['membre','moderateur','admin','fondateur']
-    : ['membre','moderateur'];
+  const roleOptions = isFounder ? ['membre', 'moderateur', 'admin', 'fondateur'] : ['membre', 'moderateur'];
 
-  document.getElementById('adminMain').innerHTML = `
+  $('adminMain').innerHTML = `
     <h2 class="admin-section-title">🎖️ Gestion des rôles</h2>
     <p style="color:var(--muted);margin-bottom:24px;font-size:.88rem">
       ${isFounder ? 'En tant que Fondateur, vous pouvez attribuer tous les rôles.' : 'Les admins peuvent attribuer Membre et Modérateur uniquement.'}
     </p>
     <div style="overflow-x:auto">
-    <table class="admin-table">
-      <thead><tr><th>Pseudo</th><th>Rôle actuel</th><th>Changer le rôle</th></tr></thead>
-      <tbody>
-        ${users.map(u => `<tr>
-          <td><strong>${u.pseudo}</strong></td>
-          <td><span class="role-badge" style="background:${roleColor(u.role)}22;color:${roleColor(u.role)}">${roleLabel(u.role)}</span></td>
-          <td>
-            ${u.role === 'fondateur' && !isFounder
-              ? '<span style="color:var(--muted);font-size:.8rem">Non modifiable</span>'
-              : `<select class="role-select" onchange="adminSetRole('${u.id}',this.value)">
-                  ${allRoles.map(r => `<option value="${r}" ${u.role===r?'selected':''}>${roleLabel(r)}</option>`).join('')}
-                </select>`
-            }
-          </td>
-        </tr>`).join('')}
-      </tbody>
-    </table></div>`;
+      <table class="admin-table">
+        <thead><tr><th>Pseudo</th><th>Rôle actuel</th><th>Changer le rôle</th></tr></thead>
+        <tbody>
+          ${users.map(user => `
+            <tr>
+              <td><strong>${user.pseudo}</strong></td>
+              <td><span class="role-badge" style="background:${roleColor(user.role)}22;color:${roleColor(user.role)}">${roleLabel(user.role)}</span></td>
+              <td>
+                ${user.role === 'fondateur' && !isFounder ? '<span style="color:var(--muted);font-size:.8rem">Non modifiable</span>' : `
+                  <select class="role-select" data-role-select data-user-id="${user.id}">
+                    ${roleOptions.map(role => `<option value="${role}" ${user.role === role ? 'selected' : ''}>${roleLabel(role)}</option>`).join('')}
+                  </select>
+                `}
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 function renderAdminLogs() {
   if (!Auth.isFounder()) {
-    document.getElementById('adminMain').innerHTML = '<p style="color:var(--accent);padding:20px">⛔ Accès réservé aux Fondateurs.</p>';
+    $('adminMain').innerHTML = '<p style="color:var(--accent);padding:20px">⛔ Accès réservé aux Fondateurs.</p>';
     return;
   }
+
   const logs = Auth.getLogs().slice(0, 200);
   const users = Auth.getAllUsers();
-  const findUser = id => users.find(u => u.id === id);
+  const findUser = id => users.find(user => user.id === id);
 
-  document.getElementById('adminMain').innerHTML = `
+  $('adminMain').innerHTML = `
     <h2 class="admin-section-title">📋 Logs (${logs.length})</h2>
-    <div id="logsList">
-      ${logs.map(l => {
-        const u = l.userId ? findUser(l.userId) : null;
-        const time = new Date(l.timestamp).toLocaleString('fr-FR');
-        return `<div class="log-entry ${l.action}">
-          <div>
-            <div class="log-action">${l.action}</div>
-            <div class="log-time">${time}</div>
-          </div>
-          <div>
-            <div class="log-details">${l.details}</div>
-            ${u ? `<div style="font-size:.75rem;color:var(--muted);margin-top:3px">Par : ${u.pseudo} (${u.role})</div>` : ''}
-          </div>
-        </div>`;
-      }).join('')}
-      ${logs.length === 0 ? '<p style="color:var(--muted)">Aucun log enregistré.</p>' : ''}
-    </div>`;
+    <div class="admin-panel-top">
+      <input class="admin-search" id="adminLogSearch" placeholder="Rechercher dans les logs..." />
+      <span class="admin-hint" id="adminLogCount">Logs : ${logs.length}</span>
+      <div class="admin-panel-actions">
+        <span class="live-badge">FLUX EN DIRECT</span>
+        <button type="button" class="refresh-btn" data-admin-action="refresh-logs">🔄 Actualiser</button>
+        <button type="button" class="refresh-btn secondary" data-admin-action="clear-logs">🧹 Vider les logs</button>
+      </div>
+    </div>
+    <div id="logsList"></div>
+  `;
+
+  $('adminLogSearch').addEventListener('input', adminFilterLogs);
+  updateAdminLogsList();
+}
+
+function updateAdminLogsList() {
+  const query = $('adminLogSearch')?.value.trim().toLowerCase() || '';
+  const logs = Auth.getLogs().slice(0, 200);
+  const users = Auth.getAllUsers();
+  const findUser = id => users.find(user => user.id === id);
+  const filtered = logs.filter(log =>
+    log.action.toLowerCase().includes(query) ||
+    log.details.toLowerCase().includes(query) ||
+    (findUser(log.userId)?.pseudo || '').toLowerCase().includes(query)
+  );
+
+  $('adminLogCount').textContent = `Logs : ${filtered.length}/${logs.length}`;
+  $('logsList').innerHTML = filtered.map(log => {
+    const author = log.userId ? findUser(log.userId) : null;
+    return `
+      <div class="log-entry ${log.action}">
+        <div>
+          <div class="log-action">${log.action}</div>
+          <div class="log-time">${new Date(log.timestamp).toLocaleString('fr-FR')}</div>
+        </div>
+        <div>
+          <div class="log-details">${log.details}</div>
+          ${author ? `<div style="font-size:.75rem;color:var(--muted);margin-top:3px">Par : ${author.pseudo} (${author.role})</div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('') + (filtered.length === 0 ? '<p style="color:var(--muted)">Aucun log trouvé.</p>' : '');
+}
+
+function adminFilterLogs() {
+  updateAdminLogsList();
+}
+
+function adminClearLogs() {
+  if (!Auth.isFounder()) return;
+  if (!confirm('Vider tous les logs ? Cette action est irréversible.')) return;
+  localStorage.removeItem('fp_logs');
+  renderAdminLogs();
 }
 
 function renderAdminGames() {
-  let list = [...games];
-  document.getElementById('adminMain').innerHTML = `
+  const featuredCount = games.filter(isGameFeatured).length;
+  $('adminMain').innerHTML = `
     <h2 class="admin-section-title">🔄 Jeux (${games.length})</h2>
-    <button class="refresh-btn" onclick="adminRefreshGames()">🔄 Relancer la recherche / Actualiser</button>
-    <input class="game-search-admin" id="adminGameSearch" placeholder="Filtrer les jeux..." oninput="adminFilterGames()"/>
-    <div id="adminGameList">
-      ${renderAdminGameRows(games)}
-    </div>`;
+    <div class="admin-panel-top">
+      <input class="admin-search" id="adminGameSearch" placeholder="Filtrer les jeux..." />
+      <span class="admin-hint" id="adminGameHint">À la une : ${featuredCount} · Résultats : ${games.length}</span>
+      <button type="button" class="refresh-btn" data-admin-action="refresh-games">🔄 Actualiser</button>
+    </div>
+    <div id="adminGameList">${renderAdminGameRows(games)}</div>
+  `;
+
+  $('adminGameSearch').addEventListener('input', adminFilterGames);
 }
 
 function renderAdminGameRows(list) {
-  return list.map(g => {
-    const plats = (g.platforms||[]).map(p => PLATFORMS[p]?.icon || '').join(' ');
-    return `<div class="game-row">
-      <div class="game-row-emoji">${g.emoji}</div>
-      <div>
-        <div class="game-row-name">${g.name}</div>
-        <div class="game-row-plat">${plats} · ${g.catLabel||g.cat}</div>
+  return list.map(game => {
+    const icons = (game.platforms || []).map(code => PLATFORMS[code]?.icon || '').join(' ');
+    const featured = isGameFeatured(game);
+    const sizeLabel = game.size || GAME_SIZES?.[game.id] || '—';
+    return `
+      <div class="game-row game-row-admin">
+        <div class="game-row-emoji">${game.emoji}</div>
+        <div class="game-row-data">
+          <div class="game-row-name">${game.name}</div>
+          <div class="game-row-plat">${icons} · ${game.catLabel || game.cat} · ${sizeLabel}</div>
+        </div>
+        <div class="game-row-actions">
+          <button type="button" class="act-btn act-role" data-admin-action="toggle-featured" data-game-id="${game.id}">${featured ? 'Désactiver à la une' : 'Mettre à la une'}</button>
+          <a class="game-row-link" href="${game.url}" target="_blank" rel="noopener noreferrer">↗ Ouvrir</a>
+        </div>
       </div>
-      <a class="game-row-link" href="${g.url}" target="_blank">↗ Ouvrir</a>
-    </div>`;
+    `;
   }).join('');
 }
 
 function adminFilterGames() {
-  const q = document.getElementById('adminGameSearch').value.toLowerCase();
-  const filtered = games.filter(g =>
-    g.name.toLowerCase().includes(q) ||
-    (g.catLabel || '').toLowerCase().includes(q) ||
-    (g.desc || '').toLowerCase().includes(q) ||
-    (g.tags || []).some(t => t.toLowerCase().includes(q))
-  );
-  document.getElementById('adminGameList').innerHTML = renderAdminGameRows(filtered);
+  const query = $('adminGameSearch').value.toLowerCase();
+  const filtered = games.filter(game => [game.name, game.catLabel, game.desc, ...(game.tags || [])].some(value =>
+    String(value).toLowerCase().includes(query)
+  ));
+  const featuredCount = filtered.filter(isGameFeatured).length;
+  $('adminGameList').innerHTML = renderAdminGameRows(filtered);
+  $('adminGameHint').textContent = `À la une : ${featuredCount} · Résultats : ${filtered.length}`;
 }
 
 function adminRefreshGames() {
   Auth.addLog('GAME_REFRESH', `Liste des jeux actualisée (${games.length} jeux)`, Auth.currentUser()?.id);
-  const btn = document.querySelector('.refresh-btn');
-  btn.textContent = '✅ Actualisé !';
-  setTimeout(() => { btn.textContent = '🔄 Relancer la recherche / Actualiser'; }, 2000);
+  const button = document.querySelector('[data-admin-action="refresh-games"]');
+  if (button) {
+    button.textContent = '✅ Actualisé !';
+    setTimeout(() => { button.textContent = '🔄 Relancer la recherche / Actualiser'; }, 2000);
+  }
   renderAdminGames();
 }
 
-// ── Actions rapides Admin ──
 function adminToggleBan(userId) {
-  const r = Auth.toggleBan(userId);
-  if (r.ok) renderAdminUsers();
-  else alert(r.error);
+  const result = Auth.toggleBan(userId);
+  if (!result.ok) { alert(result.error); return; }
+  renderAdminUsers();
 }
+
 function adminDelete(userId, pseudo) {
   if (!confirm(`Supprimer définitivement le compte de ${pseudo} ?`)) return;
-  const r = Auth.deleteUser(userId);
-  if (r.ok) renderAdminUsers();
-  else alert(r.error);
-}
-function adminSetRole(userId, newRole) {
-  const r = Auth.setRole(userId, newRole);
-  if (!r.ok) alert(r.error);
-  else { renderAdminRoles(); }
+  const result = Auth.deleteUser(userId);
+  if (!result.ok) { alert(result.error); return; }
+  renderAdminUsers();
 }
 
-// ══════════════════════════════════
-// INIT
-// ══════════════════════════════════
-async function init() {
-  await Auth.init();
-  renderHeaderAuth();
-  renderPlatforms();
-  renderFeatured();
-  renderCategoryFilters();
-  renderGames();
-  showPage('home');
-  // Enter dans les champs login/register
-  document.getElementById('loginPassword').addEventListener('keydown', e => { if (e.key==='Enter') doLogin(); });
-  document.getElementById('regPassword').addEventListener('keydown', e => { if (e.key==='Enter') doRegister(); });
+function adminSetRole(userId, role) {
+  const result = Auth.setRole(userId, role);
+  if (!result.ok) { alert(result.error); return; }
+  renderAdminRoles();
 }
 
-document.addEventListener('DOMContentLoaded', init);
+function handleBodyClick(event) {
+  const actionElement = event.target.closest('[data-action]');
+  if (!actionElement) return;
+  const action = actionElement.dataset.action;
+  if (!action) return;
+
+  event.preventDefault();
+
+  switch (action) {
+    case 'open-auth':
+      showAuthModal(actionElement.dataset.authTarget || 'login');
+      break;
+    case 'show-page':
+      showPage(actionElement.dataset.page);
+      break;
+    case 'scroll-platforms':
+      scrollToPlatforms();
+      break;
+    case 'switch-auth-tab':
+      switchAuthTab(actionElement.dataset.authTab || 'login');
+      break;
+    case 'scroll-games':
+      scrollToGames();
+      break;
+    case 'open-game':
+      openGameModal(actionElement.dataset.gameId);
+      break;
+    case 'play-game':
+      window.open(actionElement.href, '_blank', 'noopener noreferrer');
+      break;
+    case 'rate-game':
+      {
+        const gameId = actionElement.dataset.gameId;
+        const score = actionElement.dataset.score;
+        const result = setGameRating(gameId, score);
+        if (!result.ok) { alert(result.error); break; }
+        openGameModal(gameId);
+      }
+      break;
+    case 'close-game-modal':
+      hideGameModal();
+      break;
+    case 'open-profile':
+      showProfileModal();
+      break;
+    case 'close-auth':
+      hideAuthModal();
+      break;
+    case 'close-profile':
+      hideProfileModal();
+      break;
+    case 'logout':
+      doLogout();
+      break;
+    case 'select-platform':
+      selectPlatform(actionElement.dataset.platform);
+      break;
+    case 'select-category':
+      selectCategory(actionElement.dataset.category);
+      break;
+    case 'admin-tab':
+      adminTab(actionElement.dataset.adminTab);
+      break;
+    case 'admin-back':
+      showPage('home');
+      break;
+    case 'toggle-ban':
+      adminToggleBan(actionElement.dataset.userId);
+      break;
+    case 'delete-user':
+      adminDelete(actionElement.dataset.userId, actionElement.dataset.userPseudo);
+      break;
+    case 'toggle-featured':
+      toggleGameFeatured(actionElement.dataset.gameId);
+      break;
+    case 'refresh-games':
+      adminRefreshGames();
+      break;
+    case 'refresh-logs':
+      updateAdminLogsList();
+      break;
+    case 'clear-logs':
+      adminClearLogs();
+      break;
+  }
+}
+
+function handleBodyChange(event) {
+  const select = event.target.closest('[data-role-select]');
+  if (!select) return;
+  adminSetRole(select.dataset.userId, select.value);
+}
+
+function init() {
+  App.elements = {
+    authModal: $('authModal'),
+    profileModal: $('profileModal'),
+    formLogin: $('formLogin'),
+    formRegister: $('formRegister'),
+    searchInput: $('searchInput'),
+  };
+
+  loadGameInteractions();
+  loadFeaturedOverrides();
+  Auth.init().then(() => {
+    renderHeaderAuth();
+    renderPlatforms();
+    renderFeatured();
+    renderCategoryFilters();
+    renderGames();
+    if (Auth.isLoggedIn()) {
+      showPage('home');
+    } else {
+      $('pagHome').style.display = 'none';
+      showAuthModal('login');
+    }
+  });
+
+  document.body.addEventListener('click', handleBodyClick);
+  document.body.addEventListener('change', handleBodyChange);
+  document.getElementById('authClose').addEventListener('click', hideAuthModal);
+  document.getElementById('profileClose').addEventListener('click', hideProfileModal);
+  document.getElementById('authModal').addEventListener('click', closeAuthModal);
+  document.getElementById('profileModal').addEventListener('click', closeProfileModal);
+  document.getElementById('gameModal').addEventListener('click', closeGameModalOverlay);
+  App.elements.formLogin.addEventListener('submit', handleLogin);
+  App.elements.formRegister.addEventListener('submit', handleRegister);
+  App.elements.searchInput.addEventListener('input', onSearch);
+}
+
+window.addEventListener('DOMContentLoaded', init);

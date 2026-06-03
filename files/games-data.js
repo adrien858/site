@@ -27,6 +27,15 @@ const CATEGORIES = {
   mmo:       { label: 'MMO',        icon: '🌍' },
 };
 
+const GAME_SIZES = {
+  pc01: '30 Go', pc02: '18 Go', pc03: '35 Go', pc04: '70 Go', pc05: '50 Go', pc06: '40 Go', pc07: '25 Go', pc08: '35 Go', pc09: '85 Go', pc10: '95 Go', pc11: '30 Go', pc12: '80 Go', pc13: '28 Go', pc14: '16 Go', pc15: '45 Go', pc16: '90 Go', pc17: '25 Go', pc18: '38 Go', pc19: '22 Go', pc20: '70 Go', pc21: '15 Go',
+  ps01: '30 Go', ps02: '50 Go', ps03: '70 Go', ps04: '95 Go', ps05: '25 Go', ps06: '6 Go', ps07: '4 Go', ps08: '40 Go', ps09: '1.5 Go', ps10: '4 Go',
+  xb01: '30 Go', xb02: '80 Go', xb03: '95 Go', xb04: '50 Go', xb05: '25 Go', xb06: '6 Go', xb07: '45 Go', xb08: '1.5 Go',
+  sw01: '30 Go', sw02: '1.1 Go', sw03: '50 Go', sw04: '25 Go', sw05: '6 Go', sw06: '1.5 Go', sw07: '30 Go', sw08: '40 Go',
+  mb01: '1.4 Go', mb02: '0.13 Go', mb03: '0.22 Go', mb04: '1.0 Go', mb05: '70 Go', mb06: '0.18 Go', mb07: '0.7 Go', mb08: '1.1 Go', mb09: '1.5 Go', mb10: '0.9 Go',
+  br01: '0.9 Go', br02: '0.05 Go', br03: '0.03 Go', br04: '1.2 Go', br05: '0.12 Go', br06: '0.02 Go', br07: '0.02 Go', br08: '0.02 Go', br09: '0.01 Go', br10: '0.9 Go', br11: '0.03 Go', br12: '0.4 Go', br13: '0.02 Go',
+};
+
 const games = [
 
   // ════════════ PC ════════════
