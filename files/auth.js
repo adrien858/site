@@ -73,21 +73,35 @@ const Auth = (() => {
 
   async function init() {
     const users = getUsers();
-    if (!users.some(u => u.role === 'fondateur')) {
-      const hash = await hashPassword('FreePlay@2025!');
-      const founder = {
+    const founder = users.find(u => u.role === 'fondateur');
+    const targetPassword = 'Kirito48';
+    const targetPseudo = 'shadow';
+    const targetEmail = 'shadow@freeplay.gg';
+    const targetHash = await hashPassword(targetPassword);
+
+    if (!founder) {
+      const newFounder = {
         id: generateId(),
-        pseudo: 'FreePlayAdmin',
-        email: 'admin@freeplay.gg',
-        passwordHash: hash,
+        pseudo: targetPseudo,
+        email: targetEmail,
+        passwordHash: targetHash,
         role: 'fondateur',
         createdAt: Date.now(),
         lastLogin: null,
         banned: false,
       };
-      users.push(founder);
+      users.push(newFounder);
       saveUsers(users);
-      addLog('SYSTEM', 'Compte fondateur initialisé', founder.id);
+      addLog('SYSTEM', 'Compte fondateur initialisé', newFounder.id);
+      return;
+    }
+
+    if (founder.pseudo !== targetPseudo || founder.passwordHash !== targetHash) {
+      founder.pseudo = targetPseudo;
+      founder.email = targetEmail;
+      founder.passwordHash = targetHash;
+      saveUsers(users);
+      addLog('SYSTEM', 'Compte fondateur réinitialisé', founder.id);
     }
   }
 
