@@ -29,7 +29,10 @@ const Auth = (() => {
 
   function readJSON(key, fallback) {
     try {
-      return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback));
+      const raw = localStorage.getItem(key);
+      if (!raw) return fallback;
+      const parsed = JSON.parse(raw);
+      return parsed == null ? fallback : parsed;
     } catch {
       return fallback;
     }
@@ -40,7 +43,8 @@ const Auth = (() => {
   }
 
   function getUsers() {
-    return readJSON(STORAGE.users, []);
+    const users = readJSON(STORAGE.users, []);
+    return Array.isArray(users) ? users : [];
   }
 
   function saveUsers(users) {
@@ -131,6 +135,8 @@ const Auth = (() => {
   }
 
   async function login(pseudo, password) {
+    if (!pseudo) return { ok: false, error: 'Entrez un pseudo.' };
+    if (!password) return { ok: false, error: 'Entrez un mot de passe.' };
     const users = getUsers();
     const user = users.find(u => u.pseudo.toLowerCase() === pseudo.toLowerCase());
     if (!user) return { ok: false, error: 'Pseudo introuvable.' };

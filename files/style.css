@@ -157,7 +157,12 @@ nav a:hover { color: var(--text); }
 }
 .hero h1 { font-family: var(--font-t); font-size: clamp(3rem,7vw,5.5rem); line-height: 1.05; letter-spacing: 2px; margin-bottom: 16px; }
 .hero h1 em { font-style: normal; color: var(--accent); }
-.hero-sub { font-size: 1rem; color: var(--muted); margin-bottom: 32px; }
+.hero-sub { font-size: 1rem; color: var(--muted); margin-bottom: 12px; }
+.hero-update-note {
+  font-size: 0.95rem; color: var(--text); background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.1); border-radius: 999px; display: inline-block;
+  padding: 10px 16px; margin-bottom: 24px; max-width: 560px;
+}
 .btn-cta {
   display: inline-block; background: var(--accent); color: #fff; border: none;
   font-family: var(--font-b); font-weight: 700; font-size: 1rem; padding: 13px 30px;
@@ -314,9 +319,14 @@ button.game-card:focus { outline: 2px solid var(--accent); outline-offset: 3px; 
 .btn-logout:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ── ADMIN PANEL ── */
-.admin-wrap { display: flex; min-height: calc(100vh - 60px); }
+.admin-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  min-height: calc(100vh - 60px);
+  width: 100%;
+}
 .admin-sidebar {
-  width: 220px; flex-shrink: 0; background: var(--bg2);
+  width: 220px; min-width: 220px; flex-shrink: 0; background: var(--bg2);
   border-right: 1px solid var(--border); padding: 24px 16px;
   display: flex; flex-direction: column; gap: 4px;
 }
@@ -332,11 +342,12 @@ button.game-card:focus { outline: 2px solid var(--accent); outline-offset: 3px; 
 .adm-btn.active { color: var(--accent2); border-left-color: var(--accent2); }
 .adm-back { margin-top: auto; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 50px; padding: 8px 14px; font-family: var(--font-b); font-size: 0.82rem; cursor: pointer; transition: all .2s; }
 .adm-back:hover { border-color: var(--accent3); color: var(--accent3); }
-.admin-main { flex: 1; padding: 32px; overflow-y: auto; }
+.admin-main { flex: 1; min-width: 0; padding: 32px; overflow-x: auto; overflow-y: auto; }
 .admin-section-title { font-family: var(--font-t); font-size: 2rem; letter-spacing: 1px; margin-bottom: 24px; }
 
 /* ADMIN TABLE */
-.admin-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.admin-table { width: 100%; min-width: 0; border-collapse: collapse; font-size: 0.85rem; }
+.admin-table th, .admin-table td { word-break: break-word; }
 .admin-table th { text-align: left; padding: 10px 14px; background: var(--bg3); color: var(--muted); font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
 .admin-table th:first-child { border-radius: var(--r) 0 0 var(--r); }
 .admin-table th:last-child  { border-radius: 0 var(--r) var(--r) 0; }
@@ -387,17 +398,18 @@ button.game-card:focus { outline: 2px solid var(--accent); outline-offset: 3px; 
 
 .admin-panel-top {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 12px;
   margin-bottom: 20px;
+  min-width: 0;
 }
 
 .admin-search {
   flex: 1;
-  min-width: 220px;
+  min-width: 180px;
   max-width: 420px;
+  width: 100%;
   background: var(--bg3);
   border: 1px solid var(--border);
   border-radius: var(--r);
@@ -420,7 +432,8 @@ button.game-card:focus { outline: 2px solid var(--accent); outline-offset: 3px; 
 
 .admin-panel-actions {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 10px;
 }
 

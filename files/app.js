@@ -25,7 +25,7 @@ function formatDate(timestamp) {
 }
 
 function avatarBg(pseudo) {
-  const colors = ['#ff3c5f', '#ff9500', '#ffbe00', '#00c470', '#00e5ff', '#007aff', '#af52de'];
+  const colors = ['#ff3c5f', '#ff9500', '#ffbe00', '#00c470', '#00e5ff', '#007aff', '#050505'];
   let hash = 0;
   for (const char of pseudo) {
     hash = (hash * 31 + char.charCodeAt(0)) % colors.length;
@@ -67,6 +67,134 @@ function loadGameInteractions() {
 
 function saveGameInteractions() {
   localStorage.setItem('fp_game_interactions', JSON.stringify(App.gameInteractions));
+}
+
+function readJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed == null ? fallback : parsed;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJSON(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function assignSequentialGameIds() {
+  const mapping = new Map();
+  const allGames = [...games, ...EXTRA_FREE_GAMES];
+  let nextId = 1;
+
+  for (const game of allGames) {
+    // Ne réaffecte un ID que si le jeu n'en a pas déjà un.
+    // Réaffecter systématiquement provoquait des décalages (les IDs changeaient
+    // quand la liste évoluait) et cassait la persistance dans localStorage.
+    const legacyId = game.id != null ? String(game.id) : null;
+    if (legacyId) {
+      // Conserver l'ID existant comme legacyId pour compatibilité
+      game.legacyId = legacyId;
+      continue;
+    }
+
+    const newId = String(nextId++);
+    game.id = newId;
+    mapping.set(newId, newId);
+  }
+
+  return mapping;
+}
+
+function migrateGameInteractions(mapping) {
+  const migrated = {};
+  let changed = false;
+
+  for (const [gameId, data] of Object.entries(App.gameInteractions)) {
+    const normalizedId = mapping.get(String(gameId)) || String(gameId);
+    migrated[normalizedId] = data;
+    if (normalizedId !== String(gameId)) {
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    App.gameInteractions = migrated;
+    saveGameInteractions();
+  }
+}
+
+function migrateDiscoveredGames(mapping, gamesList) {
+  let changed = false;
+
+  for (const game of gamesList) {
+    const normalizedId = mapping.get(String(game.id));
+    if (normalizedId && normalizedId !== String(game.id)) {
+      game.id = normalizedId;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    saveDiscoveredGames(gamesList);
+  }
+
+  return gamesList;
+}
+
+function getDiscoveredGames() {
+  return readJSON('fp_discovered_games', []);
+}
+
+function saveDiscoveredGames(gamesList) {
+  writeJSON('fp_discovered_games', gamesList);
+}
+
+function getLastFreeSearch() {
+  return readJSON('fp_last_free_search', null);
+}
+
+function setLastFreeSearch(timestamp) {
+  writeJSON('fp_last_free_search', timestamp);
+}
+
+function mergeDiscoveredGames() {
+  const discovered = getDiscoveredGames();
+  for (const game of discovered) {
+    if (!games.some(item => item.id === game.id)) {
+      games.push(game);
+    }
+  }
+}
+
+function discoverFreeGames() {
+  const knownIds = new Set(games.map(game => game.id));
+  const discovered = getDiscoveredGames();
+  const pending = EXTRA_FREE_GAMES.filter(game => !knownIds.has(game.id) && !discovered.some(item => item.id === game.id));
+  setLastFreeSearch(Date.now());
+
+  if (!pending.length) {
+    return { added: 0 };
+  }
+
+  pending.forEach(game => {
+    games.push(game);
+    discovered.push(game);
+  });
+  saveDiscoveredGames(discovered);
+  return { added: pending.length };
+}
+
+function maybeAutoSearchFreeGames() {
+  const lastSearch = getLastFreeSearch();
+  const now = Date.now();
+  const monthMs = 1000 * 60 * 60 * 24 * 30;
+  if (!lastSearch || now - lastSearch >= monthMs) {
+    const result = discoverFreeGames();
+    Auth.addLog('GAME_SEARCH', result.added ? `Recherche auto gratuite : ${result.added} nouveau(x) jeu(x)` : 'Recherche auto gratuite : aucun nouveau jeu', Auth.currentUser()?.id);
+  }
 }
 
 function ensureGameStore(gameId) {
@@ -184,7 +312,7 @@ function openGameModal(gameId) {
   const comments = getGameComments(gameId);
   const ratingInfo = getGameRatingStats(gameId);
   const userRating = getUserGameRating(gameId);
-  const sizeLabel = game.size || GAME_SIZES?.[game.id] || 'Non renseignée';
+  const sizeLabel = game.size || GAME_SIZES?.[game.id] || GAME_SIZES?.[game.legacyId] || 'Non renseignée';
   const downloadUrl = game.downloadUrl || game.url;
 
   $('gameModalContent').innerHTML = `
@@ -728,12 +856,14 @@ function adminClearLogs() {
 
 function renderAdminGames() {
   const featuredCount = games.filter(isGameFeatured).length;
+  const lastSearch = getLastFreeSearch();
   $('adminMain').innerHTML = `
     <h2 class="admin-section-title">🔄 Jeux (${games.length})</h2>
     <div class="admin-panel-top">
       <input class="admin-search" id="adminGameSearch" placeholder="Filtrer les jeux..." />
+      <span class="admin-hint">Dernière recherche : ${lastSearch ? formatDate(lastSearch) : 'Jamais'}</span>
       <span class="admin-hint" id="adminGameHint">À la une : ${featuredCount} · Résultats : ${games.length}</span>
-      <button type="button" class="refresh-btn" data-admin-action="refresh-games">🔄 Actualiser</button>
+      <button type="button" class="refresh-btn" data-admin-action="refresh-games">🔎 Rechercher des jeux gratuits</button>
     </div>
     <div id="adminGameList">${renderAdminGameRows(games)}</div>
   `;
@@ -773,12 +903,17 @@ function adminFilterGames() {
 }
 
 function adminRefreshGames() {
-  Auth.addLog('GAME_REFRESH', `Liste des jeux actualisée (${games.length} jeux)`, Auth.currentUser()?.id);
+  const result = discoverFreeGames();
   const button = document.querySelector('[data-admin-action="refresh-games"]');
   if (button) {
-    button.textContent = '✅ Actualisé !';
-    setTimeout(() => { button.textContent = '🔄 Relancer la recherche / Actualiser'; }, 2000);
+    if (result.added) {
+      button.textContent = `✅ ${result.added} jeu${result.added > 1 ? 'x' : ''} ajouté${result.added > 1 ? 's' : ''}`;
+    } else {
+      button.textContent = '✅ Aucun nouveau jeu';
+    }
+    setTimeout(() => { button.textContent = '🔎 Rechercher des jeux gratuits'; }, 3000);
   }
+  Auth.addLog('GAME_SEARCH', result.added ? `Recherche manuelle : ${result.added} nouveau(x) jeu(x)` : 'Recherche manuelle : aucun nouveau jeu', Auth.currentUser()?.id);
   renderAdminGames();
 }
 
@@ -903,9 +1038,14 @@ function init() {
     searchInput: $('searchInput'),
   };
 
+  const gameMigrationMap = assignSequentialGameIds();
   loadGameInteractions();
+  migrateGameInteractions(gameMigrationMap);
+  const discoveredGames = migrateDiscoveredGames(gameMigrationMap, getDiscoveredGames());
   loadFeaturedOverrides();
+  mergeDiscoveredGames();
   Auth.init().then(() => {
+    maybeAutoSearchFreeGames();
     renderHeaderAuth();
     renderPlatforms();
     renderFeatured();
