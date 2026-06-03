@@ -405,6 +405,12 @@ button.game-card:focus { outline: 2px solid var(--accent); outline-offset: 3px; 
   min-width: 0;
 }
 
+/* Forcer les enfants du panneau à s'empiler verticalement et occuper
+   toute la largeur du conteneur afin d'éviter un affichage "gauche -> droite" */
+.admin-panel-top > * {
+  width: 100%;
+}
+
 .admin-search {
   flex: 1;
   min-width: 180px;
@@ -435,6 +441,10 @@ button.game-card:focus { outline: 2px solid var(--accent); outline-offset: 3px; 
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
+}
+
+.admin-panel-actions > * {
+  width: 100%;
 }
 
 .live-badge {
